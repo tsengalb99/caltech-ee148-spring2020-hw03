@@ -8,21 +8,11 @@ from torchvision import datasets, transforms
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data.sampler import SubsetRandomSampler
 
+import random
 import os
-
-'''
-This code is adapted from two sources:
-(i) The official PyTorch MNIST example (https://github.com/pytorch/examples/blob/master/mnist/main.py)
-(ii) Starter code from Yisong Yue's CS 155 Course (http://www.yisongyue.com/courses/cs155/2020_winter/)
-'''
+import numpy as np
 
 class fcNet(nn.Module):
-    '''
-    Design your model with fully connected layers (convolutional layers are not
-    allowed here). Initial model is designed to have a poor performance. These
-    are the sample units you can try:
-        Linear, Dropout, activation layers (ReLU, softmax)
-    '''
     def __init__(self):
         # Define the units that you will use in your model
         # Note that this has nothing to do with the order in which operations
@@ -45,9 +35,6 @@ class fcNet(nn.Module):
 
 
 class ConvNet(nn.Module):
-    '''
-    Design your model with convolutional layers.
-    '''
     def __init__(self):
         super(ConvNet, self).__init__()
         self.conv1 = nn.Conv2d(in_channels=1, out_channels=8, kernel_size=(3,3), stride=1)
@@ -78,9 +65,6 @@ class ConvNet(nn.Module):
 
 
 class Net(nn.Module):
-    '''
-    Build the best MNIST classifier.
-    '''
     def __init__(self):
         super(Net, self).__init__()
 
@@ -89,25 +73,27 @@ class Net(nn.Module):
 
 
 def train(args, model, device, train_loader, optimizer, epoch):
-    '''
-    This is your training function. When you call this function, the model is
-    trained for 1 epoch.
-    '''
     model.train()   # Set the model to training mode
+    train_loss = 0
+    train_num = 0
     for batch_idx, (data, target) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
         optimizer.zero_grad()               # Clear the gradient
         output = model(data)                # Make predictions
         loss = F.nll_loss(output, target)   # Compute loss
+        
+        train_loss += F.nll_loss(output, target, reduction='sum').item()
+        train_num += len(data)
+        
         loss.backward()                     # Gradient computation
         optimizer.step()                    # Perform a single optimization step
-        if batch_idx % args.log_interval == 0:
-            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                epoch, batch_idx * len(data), len(train_loader.sampler),
-                100. * batch_idx / len(train_loader), loss.item()))
+        #if batch_idx % 10 == 0:
+        #    print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
+        #        epoch, batch_idx * len(data), len(train_loader.sampler),
+        #        100. * batch_idx / len(train_loader), loss.item()))
+    return train_loss/train_num
 
-
-def test(model, device, test_loader):
+def test(model, device, test_loader, valid=True):
     model.eval()    # Set the model to inference mode
     test_loss = 0
     correct = 0
@@ -123,9 +109,11 @@ def test(model, device, test_loader):
 
     test_loss /= test_num
 
-    print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
+    print('\n{} set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
+        "Test" if not valid else "Valid", 
         test_loss, correct, test_num,
         100. * correct / test_num))
+    return test_loss
 
 
 def main():
@@ -134,8 +122,6 @@ def main():
     parser = argparse.ArgumentParser(description='PyTorch MNIST Example')
     parser.add_argument('--batch-size', type=int, default=256, metavar='N',
                         help='input batch size for training (default: 64)')
-    parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
-                        help='input batch size for testing (default: 1000)')
     parser.add_argument('--epochs', type=int, default=14, metavar='N',
                         help='number of epochs to train (default: 14)')
     parser.add_argument('--lr', type=float, default=1.0, metavar='LR',
@@ -144,92 +130,89 @@ def main():
                         help='number of epochs between learning rate reductions (default: 1)')
     parser.add_argument('--gamma', type=float, default=0.7, metavar='M',
                         help='Learning rate step gamma (default: 0.7)')
-    parser.add_argument('--no-cuda', action='store_true', default=False,
-                        help='disables CUDA training')
     parser.add_argument('--seed', type=int, default=1, metavar='S',
                         help='random seed (default: 1)')
-    parser.add_argument('--log-interval', type=int, default=10, metavar='N',
-                        help='how many batches to wait before logging training status')
 
     parser.add_argument('--evaluate', action='store_true', default=False,
                         help='evaluate your model on the official test set')
-    parser.add_argument('--load-model', type=str,
-                        help='model file path')
+    parser.add_argument('--save-path', type=str, default='../models/mnist')
+    parser.add_argument('--save-name', type=str,
+                        help='model save path')
 
-    parser.add_argument('--save-model', action='store_true', default=True,
-                        help='For Saving the current Model')
     args = parser.parse_args()
-    use_cuda = not args.no_cuda and torch.cuda.is_available()
 
     torch.manual_seed(args.seed)
+    random.seed(args.seed)
+    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    device = torch.device("cuda" if use_cuda else "cpu")
-
-    kwargs = {'num_workers': 1, 'pin_memory': True} if use_cuda else {}
-
-    # Evaluate on the official test set
-    if args.evaluate:
-        assert os.path.exists(args.load_model)
-
-        # Set the test model
-        model = fcNet().to(device)
-        model.load_state_dict(torch.load(args.load_model))
-
-        test_dataset = datasets.MNIST('../data', train=False,
-                    transform=transforms.Compose([
-                        transforms.ToTensor(),
-                        transforms.Normalize((0.1307,), (0.3081,))
-                    ]))
-
-        test_loader = torch.utils.data.DataLoader(
-            test_dataset, batch_size=args.test_batch_size, shuffle=True, **kwargs)
-
-        test(model, device, test_loader)
-
-        return
+    kwargs = {'num_workers': 8, 'pin_memory': True} if torch.cuda.is_available() else {}
 
     # Pytorch has default MNIST dataloader which loads data at each iteration
     train_dataset = datasets.MNIST('../data', train=True, download=True,
                 transform=transforms.Compose([       # Data preprocessing
-                    transforms.ToTensor(),           # Add data augmentation here
+                    transforms.ColorJitter(brightness=0.3, contrast=0.3),
+                    transforms.RandomAffine(degrees=5, shear=5),
+                    transforms.ToTensor(),
+                    transforms.Normalize((0.1307,), (0.3081,))
+                ]))
+    
+    test_dataset = datasets.MNIST('../data', train=False,
+                transform=transforms.Compose([
+                    transforms.ToTensor(),
                     transforms.Normalize((0.1307,), (0.3081,))
                 ]))
 
-    # You can assign indices for training/validation or use a random subset for
-    # training by using SubsetRandomSampler. Right now the train and validation
-    # sets are built from the same indices - this is bad! Change it so that
-    # the training and validation sets are disjoint and have the correct relative sizes.
-    subset_indices_train = range(len(train_dataset))
-    subset_indices_valid = range(len(train_dataset))
+    test_loader = torch.utils.data.DataLoader(
+        test_dataset, batch_size=2048, shuffle=True, **kwargs)
+
+    inds = [[] for _ in range(len(set(train_dataset.targets)))]
+    for i in range(len(train_dataset.targets)):
+        inds[train_dataset.targets[i]].append(i)
+
+    for i in range(len(inds)):
+        random.shuffle(inds[i])
+
+    valid = []
+    for i in inds:
+        valid += i[0:int(0.15*len(i))]
+    assert(len(valid) == len(set(valid)))
+    valid = set(valid)
+    
+    total = set(range(len(train_dataset)))
+    subset_indices_train = list(total.difference(valid))
+    subset_indices_valid = list(valid)
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size,
-        sampler=SubsetRandomSampler(subset_indices_train)
+        sampler=SubsetRandomSampler(subset_indices_train),
+        **kwargs
     )
     val_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=args.test_batch_size,
-        sampler=SubsetRandomSampler(subset_indices_valid)
+        train_dataset, batch_size=4096,
+        sampler=SubsetRandomSampler(subset_indices_valid),
+        **kwargs
     )
 
-    # Load your model [fcNet, ConvNet, Net]
     model = ConvNet().to(device)
 
-    # Try different optimzers here [Adam, SGD, RMSprop]
     optimizer = optim.Adadelta(model.parameters(), lr=args.lr)
 
-    # Set your learning rate scheduler
     scheduler = StepLR(optimizer, step_size=args.step, gamma=args.gamma)
 
-    # Training loop
+    loss_train = []
+    loss_valid = []
+    
     for epoch in range(1, args.epochs + 1):
-        train(args, model, device, train_loader, optimizer, epoch)
-        test(model, device, val_loader)
+        loss_train.append(train(args, model, device, train_loader, optimizer, epoch))
+        loss_valid.append(test(model, device, val_loader, valid=True))
         scheduler.step()    # learning rate scheduler
 
-        # You may optionally save your model at each epoch here
-
-    if args.save_model:
-        torch.save(model.state_dict(), "mnist_model.pt")
+    path = os.path.join(args.save_path, args.save_name)
+    os.makedirs(path, exist_ok=True)
+    torch.save(model.state_dict(), os.path.join(path, "model.pt"))
+    np.array(loss_train).dump(os.path.join(path, "train_acc.npy"))
+    np.array(loss_valid).dump(os.path.join(path, "valid_acc.npy"))
 
 
 if __name__ == '__main__':
